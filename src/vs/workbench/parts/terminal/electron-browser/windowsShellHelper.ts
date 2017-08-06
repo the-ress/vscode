@@ -5,13 +5,11 @@
 
 import * as cp from 'child_process';
 import * as platform from 'vs/base/common/platform';
-import * as path from 'path';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { Emitter, debounceEvent } from 'vs/base/common/event';
 import { ITerminalInstance } from 'vs/workbench/parts/terminal/common/terminal';
 import XTermTerminal = require('xterm');
-
-const SHELL_EXECUTABLES = ['cmd.exe', 'powershell.exe', 'bash.exe'];
+import { getProcessInfo, ProcessInfo } from 'windows-process-info';
 
 export class WindowsShellHelper {
 	private _childProcessIdStack: number[];
@@ -32,14 +30,12 @@ export class WindowsShellHelper {
 		this._childProcessIdStack = [this._rootProcessId];
 		this._isDisposed = false;
 		this._onCheckShell = new Emitter<TPromise<string>>();
-		// The debounce is necessary to prevent multiple processes from spawning when
-		// the enter key or output is spammed
+
 		debounceEvent(this._onCheckShell.event, (l, e) => e, 200, true)(() => {
 			this.checkShell();
 		});
 
-		this._xterm.on('lineFeed', () => this._onCheckShell.fire());
-		this._xterm.on('keypress', () => this._onCheckShell.fire());
+		this._terminalInstance.onData(() => this._onCheckShell.fire());
 	}
 
 	private checkShell(): void {
@@ -50,60 +46,6 @@ export class WindowsShellHelper {
 				}
 			});
 		}
-	}
-
-	private getChildProcessDetails(pid: number): TPromise<{ executable: string, pid: number }[]> {
-		return new TPromise((resolve, reject) => {
-			this._wmicProcess = cp.execFile('wmic.exe', ['process', 'where', `parentProcessId=${pid}`, 'get', 'ExecutablePath,ProcessId'], (err, stdout, stderr) => {
-				this._wmicProcess = null;
-				if (this._isDisposed) {
-					reject(null);
-				}
-				if (err) {
-					reject(err);
-				} else if (stderr.length > 0) {
-					resolve([]); // No processes found
-				} else {
-					const childProcessLines = stdout.split('\n').slice(1).filter(str => !/^\s*$/.test(str));
-					const childProcessDetails = childProcessLines.map(str => {
-						const s = str.split('  ');
-						return { executable: s[0], pid: Number(s[1]) };
-					});
-					resolve(childProcessDetails);
-				}
-			});
-		});
-	}
-
-	private refreshShellProcessTree(pid: number, parent: string): TPromise<string> {
-		return this.getChildProcessDetails(pid).then(result => {
-			// When we didn't find any child processes of the process
-			if (result.length === 0) {
-				// Case where we found a child process already and are checking further down the pid tree
-				// We have reached the end here so we know that parent is the deepest first child of the tree
-				if (parent) {
-					return TPromise.as(parent);
-				}
-				// Case where we haven't found a child and only the root shell is left
-				if (this._childProcessIdStack.length === 1) {
-					return TPromise.as(this._rootShellExecutable);
-				}
-				// Otherwise, we go up the tree to find the next valid deepest child of the root
-				this._childProcessIdStack.pop();
-				return this.refreshShellProcessTree(this._childProcessIdStack[this._childProcessIdStack.length - 1], null);
-			}
-			// We only go one level deep when checking for children of processes other then shells
-			if (SHELL_EXECUTABLES.indexOf(path.basename(result[0].executable)) === -1) {
-				return TPromise.as(result[0].executable);
-			}
-			// Save the pid in the stack and keep looking for children of that child
-			this._childProcessIdStack.push(result[0].pid);
-			return this.refreshShellProcessTree(result[0].pid, result[0].executable);
-		}, error => {
-			if (!this._isDisposed) {
-				return error;
-			}
-		});
 	}
 
 	public dispose(): void {
@@ -117,6 +59,25 @@ export class WindowsShellHelper {
 	 * Returns the innermost shell executable running in the terminal
 	 */
 	public getShellName(): TPromise<string> {
-		return this.refreshShellProcessTree(this._childProcessIdStack[this._childProcessIdStack.length - 1], null);
+		return this._terminalInstance.getProcessList().then(pids => {
+			const processes = getProcessInfo(pids);
+
+			const processMap: { [pid: number]: ProcessInfo; } = {};
+			const children: { [pid: number]: number[]; } = {};
+
+			processes.forEach(p => processMap[p.processId] = p);
+			processes.forEach(p => children[p.processId] = []);
+
+			processes.forEach(p => children[p.parentId] && children[p.parentId].push(p.processId));
+
+			let pid = this._rootProcessId;
+			while (children[pid].length !== 0) {
+				pid = children[pid].reduce(function (prev, current) {
+					return (prev && processMap[prev].startTime > processMap[current].startTime) ? prev : current;
+				}, null);
+			}
+
+			return processMap[pid] ? processMap[pid].name : this._rootShellExecutable;
+		});
 	}
 }

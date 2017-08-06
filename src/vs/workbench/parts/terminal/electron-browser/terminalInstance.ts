@@ -32,7 +32,7 @@ import { TerminalLinkHandler } from 'vs/workbench/parts/terminal/electron-browse
 import { TerminalWidgetManager } from 'vs/workbench/parts/terminal/browser/terminalWidgetManager';
 import { registerThemingParticipant, ITheme, ICssStyleCollector } from 'vs/platform/theme/common/themeService';
 import { scrollbarSliderBackground, scrollbarSliderHoverBackground, scrollbarSliderActiveBackground } from 'vs/platform/theme/common/colorRegistry';
-import { TPromise } from 'vs/base/common/winjs.base';
+import { TPromise, TValueCallback } from 'vs/base/common/winjs.base';
 import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService';
 import { IHistoryService } from 'vs/workbench/services/history/common/history';
 import pkg from 'vs/platform/node/package';
@@ -105,6 +105,7 @@ export class TerminalInstance implements ITerminalInstance {
 	private _preLaunchInputQueue: string;
 	private _initialCwd: string;
 	private _windowsShellHelper: WindowsShellHelper;
+	private _processListCallbacks: TValueCallback<number[]>[];
 
 	private _widgetManager: TerminalWidgetManager;
 	private _linkHandler: TerminalLinkHandler;
@@ -145,6 +146,7 @@ export class TerminalInstance implements ITerminalInstance {
 		this._id = TerminalInstance._idCounter++;
 		this._terminalHasTextContextKey = KEYBINDING_CONTEXT_TERMINAL_TEXT_SELECTED.bindTo(this._contextKeyService);
 		this._preLaunchInputQueue = '';
+		this._processListCallbacks = [];
 
 		this._onDisposed = new Emitter<TerminalInstance>();
 		this._onDataForApi = new Emitter<{ instance: ITerminalInstance, data: string }>();
@@ -596,6 +598,12 @@ export class TerminalInstance implements ITerminalInstance {
 				this._onProcessIdReady.fire(this);
 			}
 		});
+		this._process.on('message', (message) => {
+			if (message.type === 'processList') {
+				this._processListCallbacks.forEach(c => c(message.content));
+				this._processListCallbacks = [];
+			}
+		});
 		this._process.on('exit', exitCode => this._onPtyProcessExit(exitCode));
 		setTimeout(() => {
 			if (this._processState === ProcessState.LAUNCHING) {
@@ -909,6 +917,11 @@ export class TerminalInstance implements ITerminalInstance {
 		if (didTitleChange) {
 			this._onTitleChanged.fire(title);
 		}
+	}
+
+	public getProcessList(): TPromise<number[]> {
+		this._process.send({ event: 'getProcessList' });
+		return new TPromise<number[]>((c, e) => this._processListCallbacks.push(c));
 	}
 }
 
