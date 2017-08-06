@@ -369,9 +369,4 @@ export interface ITerminalInstance {
 	 * Sets the title of the terminal instance.
 	 */
 	setTitle(title: string, eventFromProcess: boolean): void;
-
-	/**
-	 * Sets the title of the terminal instance.
-	 */
-	getProcessList(): TPromise<number[]>;
 }

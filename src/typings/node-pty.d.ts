@@ -20,11 +20,6 @@ declare module 'node-pty' {
 
 		resize(columns: number, rows: number): void;
 
-		/**
-		 * Get list of processes attached to console.
-		 */
-		getProcessList(): number[];
-
 		write(data: string): void;
 
 		kill(): void;

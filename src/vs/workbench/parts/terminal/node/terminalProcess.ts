@@ -91,11 +91,6 @@ process.on('message', function (message) {
 		ptyProcess.write(message.data);
 	} else if (message.event === 'resize') {
 		ptyProcess.resize(message.cols, message.rows);
-	} else if (message.event === 'getProcessList') {
-		process.send({
-			type: 'processList',
-			content: ptyProcess.getProcessList()
-		});
 	} else if (message.event === 'shutdown') {
 		queueProcessExit();
 	}
